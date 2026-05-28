@@ -163,8 +163,10 @@ final class Metrics {
             let max = (desc[kIOPSMaxCapacityKey] as? NSNumber)?.doubleValue ?? 100
             let level = max > 0 ? cur / max * 100 : 0
             let charging = (desc[kIOPSIsChargingKey] as? Bool) ?? false
-            let minsKey = charging ? kIOPSTimeToFullChargeKey : kIOPSTimeToEmptyKey
-            let mins = (desc[minsKey] as? NSNumber)?.intValue ?? -1
+            // macOS time-to-full estimates are unreliable on Apple Silicon (pmset's
+            // IOPS estimate disagrees with the battery's own AvgTimeToFull), so only
+            // surface a time while discharging — time-to-empty is far more stable.
+            let mins = charging ? -1 : ((desc[kIOPSTimeToEmptyKey] as? NSNumber)?.intValue ?? -1)
             return Battery(level: level, charging: charging, minutesRemaining: mins > 0 ? mins : nil)
         }
         return nil

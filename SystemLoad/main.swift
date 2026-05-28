@@ -274,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let batColor: NSColor = bat.level <= 20 ? .systemRed : (bat.level <= 40 ? .systemOrange : .systemGreen)
             var s = String(format: "%@%3.0f%%", padded("Battery", 11) as NSString, bat.level)
             if bat.charging { s += "  ⚡" }
-            if let m = bat.minutesRemaining { s += String(format: "  %d:%02d %@", m / 60, m % 60, (bat.charging ? "to full" : "left") as NSString) }
+            if let m = bat.minutesRemaining { s += String(format: "  %d:%02d left", m / 60, m % 60) }
             menu.addItem(infoItem(s, color: batColor))
         }
 
