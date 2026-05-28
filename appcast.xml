@@ -5,5 +5,28 @@
         <link>https://github.com/kyzdes/system-load</link>
         <description>Updates for System Load</description>
         <language>en</language>
+        <item>
+            <title>Version 1.0.0</title>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <description>
+                <![CDATA[
+                <h2>System Load 1.0.0</h2>
+                <ul>
+                    <li>First public release.</li>
+                    <li>Menu-bar CPU &amp; RAM with a CPU history sparkline, memory pressure, swap, network throughput, and top processes.</li>
+                    <li>Settings window: launch at login, refresh interval, and menu-bar display options.</li>
+                    <li>Automatic updates via Sparkle.</li>
+                </ul>
+                ]]>
+            </description>
+            <pubDate>Thu, 28 May 2026 17:54:04 +0300</pubDate>
+            <enclosure
+                url="https://github.com/kyzdes/system-load/releases/download/v1.0.0/SystemLoad.zip"
+                type="application/octet-stream"
+                sparkle:edSignature="2AaJatXFtcQ6s3o70YdNShAY9W+WZhaFce0RxfyZs1I7pCfBnqGWlKMr5B0H39vYbs4eOBdzHAISk90mC91gAA==" length="1308095"
+            />
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+        </item>
     </channel>
 </rss>
