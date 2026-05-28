@@ -174,4 +174,4 @@ fi
 
 echo ""
 echo "Done. ${TAG} published."
-$DRY_RUN && echo "(dry run — nothing was actually released or pushed)"
+if $DRY_RUN; then echo "(dry run — nothing was actually released or pushed)"; fi
