@@ -5,7 +5,8 @@ import Sparkle
 
 // MARK: - Formatting helpers
 
-private func fmtMem(_ bytes: UInt64) -> String {
+// Shared with Metrics.swift (topProcesses) — must be internal, not file-private.
+func fmtMem(_ bytes: UInt64) -> String {
     let gb = Double(bytes) / 1_073_741_824.0
     if gb >= 1.0 { return String(format: "%.1f GB", gb) }
     return String(format: "%.0f MB", Double(bytes) / 1_048_576.0)
@@ -32,132 +33,6 @@ private func sparkline(_ vals: [Double], maxValue: Double = 100) -> String {
     })
 }
 
-// MARK: - Metrics
-
-final class Metrics {
-    private var prevCPUTicks: (UInt64, UInt64, UInt64, UInt64)?
-    private let pageSize = UInt64(vm_kernel_page_size)
-    let totalRAM = ProcessInfo.processInfo.physicalMemory
-
-    /// Returns CPU busy percentage since the previous call (0 on first call).
-    func cpuUsage() -> Double {
-        var info = host_cpu_load_info()
-        var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info>.size / MemoryLayout<integer_t>.size)
-        let kr = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
-            }
-        }
-        guard kr == KERN_SUCCESS else { return 0 }
-        let user = UInt64(info.cpu_ticks.0)
-        let system = UInt64(info.cpu_ticks.1)
-        let idle = UInt64(info.cpu_ticks.2)
-        let nice = UInt64(info.cpu_ticks.3)
-        defer { prevCPUTicks = (user, system, idle, nice) }
-        guard let prev = prevCPUTicks else { return 0 }
-        let dUser = Double(user &- prev.0)
-        let dSystem = Double(system &- prev.1)
-        let dIdle = Double(idle &- prev.2)
-        let dNice = Double(nice &- prev.3)
-        let total = dUser + dSystem + dIdle + dNice
-        guard total > 0 else { return 0 }
-        return (dUser + dSystem + dNice) / total * 100.0
-    }
-
-    struct Mem { var used: UInt64; var total: UInt64; var compressed: UInt64 }
-
-    func memory() -> Mem {
-        var stats = vm_statistics64()
-        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
-        let kr = withUnsafeMutablePointer(to: &stats) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
-            }
-        }
-        guard kr == KERN_SUCCESS else { return Mem(used: 0, total: totalRAM, compressed: 0) }
-        let compressed = UInt64(stats.compressor_page_count) * pageSize
-        // "Memory Used" matches Activity Monitor: App Memory + Wired + Compressed.
-        // (Reclaimable file cache and free/speculative pages are NOT counted as used,
-        //  so the figure isn't pegged near 100% the way top's total-minus-free is.)
-        let appMemory = (UInt64(stats.internal_page_count) - UInt64(stats.purgeable_count)) * pageSize
-        let wired = UInt64(stats.wire_count) * pageSize
-        let used = appMemory + wired + compressed
-        return Mem(used: min(used, totalRAM), total: totalRAM, compressed: compressed)
-    }
-
-    /// 1 = normal, 2 = warning, 4 = critical.
-    func memoryPressureLevel() -> Int {
-        var level: Int32 = 1
-        var size = MemoryLayout<Int32>.size
-        if sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) != 0 { return 1 }
-        return Int(level)
-    }
-
-    func swap() -> (used: UInt64, total: UInt64) {
-        var usage = xsw_usage()
-        var size = MemoryLayout<xsw_usage>.size
-        if sysctlbyname("vm.swapusage", &usage, &size, nil, 0) != 0 { return (0, 0) }
-        return (usage.xsu_used, usage.xsu_total)
-    }
-
-    /// Cumulative bytes received / sent across physical interfaces (excludes loopback).
-    func networkBytes() -> (rx: UInt64, tx: UInt64) {
-        var rx: UInt64 = 0, tx: UInt64 = 0
-        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return (0, 0) }
-        defer { freeifaddrs(ifaddrPtr) }
-        var ptr: UnsafeMutablePointer<ifaddrs>? = first
-        while let cur = ptr {
-            let ifa = cur.pointee
-            if let sa = ifa.ifa_addr, sa.pointee.sa_family == UInt8(AF_LINK) {
-                let name = String(cString: ifa.ifa_name)
-                if !name.hasPrefix("lo"), let dataPtr = ifa.ifa_data {
-                    let d = dataPtr.assumingMemoryBound(to: if_data.self).pointee
-                    rx += UInt64(d.ifi_ibytes)
-                    tx += UInt64(d.ifi_obytes)
-                }
-            }
-            ptr = ifa.ifa_next
-        }
-        return (rx, tx)
-    }
-
-    /// Top processes via `ps`. byCPU=true → sorted by %CPU, else by RSS. Sampled on demand (menu open).
-    func topProcesses(byCPU: Bool, limit: Int) -> [(name: String, value: String)] {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/ps")
-        if byCPU {
-            task.arguments = ["-axco", "%cpu=,comm=", "-r"]
-        } else {
-            task.arguments = ["-axco", "rss=,comm=", "-m"]
-        }
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
-        do { try task.run() } catch { return [] }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        guard let out = String(data: data, encoding: .utf8) else { return [] }
-        var result: [(String, String)] = []
-        for line in out.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let sp = trimmed.firstIndex(of: " ") else { continue }
-            let numStr = String(trimmed[..<sp])
-            let name = String(trimmed[trimmed.index(after: sp)...]).trimmingCharacters(in: .whitespaces)
-            if name.isEmpty || name == "ps" || name == "Pulse" { continue }
-            if byCPU {
-                guard let cpu = Double(numStr), cpu >= 0.1 else { continue }
-                result.append((name, String(format: "%.0f%%", cpu)))
-            } else {
-                guard let rssKB = Double(numStr) else { continue }
-                result.append((name, fmtMem(UInt64(rssKB) * 1024)))
-            }
-            if result.count >= limit { break }
-        }
-        return result
-    }
-}
-
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -178,11 +53,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var rxRate: Double = 0
     private var txRate: Double = 0
 
+    private var lastGPU: Metrics.GPU?
+    private var gpuHistory: [Double] = []
+
+    private var lastDisk: (read: UInt64, write: UInt64) = (0, 0)
+    private var lastDiskTime: Date?
+    private var diskReadRate: Double = 0
+    private var diskWriteRate: Double = 0
+
+    private var lastBattery: Metrics.Battery?
+    private var lastThermal: ProcessInfo.ThermalState = .nominal
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Prime delta-based metrics so the first displayed value is real.
         _ = metrics.cpuUsage()
         lastNet = metrics.networkBytes()
         lastNetTime = Date()
+        lastDisk = metrics.diskBytes()
+        lastDiskTime = Date()
 
         let menu = NSMenu()
         menu.delegate = self
@@ -233,8 +121,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         lastMem = metrics.memory()
 
-        let net = metrics.networkBytes()
         let now = Date()
+
+        let net = metrics.networkBytes()
         if let prevTime = lastNetTime {
             let dt = now.timeIntervalSince(prevTime)
             if dt > 0 {
@@ -244,6 +133,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         lastNet = net
         lastNetTime = now
+
+        lastGPU = metrics.gpu()
+        gpuHistory.append(lastGPU?.utilization ?? 0)
+        if gpuHistory.count > 60 { gpuHistory.removeFirst(gpuHistory.count - 60) }
+
+        let disk = metrics.diskBytes()
+        if let prevTime = lastDiskTime {
+            let dt = now.timeIntervalSince(prevTime)
+            if dt > 0 {
+                diskReadRate = Double(disk.read &- lastDisk.read) / dt
+                diskWriteRate = Double(disk.write &- lastDisk.write) / dt
+            }
+        }
+        lastDisk = disk
+        lastDiskTime = now
+
+        lastBattery = metrics.battery()
+        lastThermal = ProcessInfo.processInfo.thermalState
 
         updateTitle(cpu: cpu, ram: ramPercent())
     }
@@ -332,6 +239,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let spark = sparkline(cpuHistory)
         menu.addItem(infoItem(String(format: "%@%3.0f%%   %@", padded("CPU", 11) as NSString, lastCPU, spark as NSString),
                               color: loadColor(lastCPU)))
+        if let gpu = lastGPU {
+            menu.addItem(infoItem(String(format: "%@%3.0f%%   %@   %@", padded("GPU", 11) as NSString, gpu.utilization,
+                                         sparkline(gpuHistory) as NSString, fmtMem(gpu.memUsed) as NSString),
+                                  color: loadColor(gpu.utilization)))
+        }
         menu.addItem(infoItem(String(format: "%@%3.0f%%   %@ / %@ GB", padded("RAM", 11) as NSString, ram,
                                      fmtGB(lastMem.used) as NSString, fmtGB(lastMem.total) as NSString),
                               color: loadColor(ram)))
@@ -353,7 +265,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(infoItem(String(format: "%@not in use", padded("Swap", 11) as NSString)))
         }
 
+        menu.addItem(infoItem(String(format: "%@↓ %@   ↑ %@", padded("Disk", 11) as NSString, fmtRate(diskReadRate) as NSString, fmtRate(diskWriteRate) as NSString)))
         menu.addItem(infoItem(String(format: "%@↓ %@   ↑ %@", padded("Network", 11) as NSString, fmtRate(rxRate) as NSString, fmtRate(txRate) as NSString)))
+
+        menu.addItem(.separator())
+
+        if let bat = lastBattery {
+            let batColor: NSColor = bat.level <= 20 ? .systemRed : (bat.level <= 40 ? .systemOrange : .systemGreen)
+            var s = String(format: "%@%3.0f%%", padded("Battery", 11) as NSString, bat.level)
+            if bat.charging { s += "  ⚡" }
+            if let m = bat.minutesRemaining { s += String(format: "  %d:%02d %@", m / 60, m % 60, (bat.charging ? "to full" : "left") as NSString) }
+            menu.addItem(infoItem(s, color: batColor))
+        }
+
+        let (thermalText, thermalColor): (String, NSColor)
+        switch lastThermal {
+        case .critical: (thermalText, thermalColor) = ("🔴 Critical", .systemRed)
+        case .serious:  (thermalText, thermalColor) = ("🟠 Serious", .systemOrange)
+        case .fair:     (thermalText, thermalColor) = ("🟡 Fair", .systemOrange)
+        default:        (thermalText, thermalColor) = ("🟢 Nominal", .systemGreen)
+        }
+        menu.addItem(infoItem(String(format: "%@", padded("Thermal", 11) as NSString) + thermalText, color: thermalColor))
 
         menu.addItem(.separator())
 
