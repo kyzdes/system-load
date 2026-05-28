@@ -17,21 +17,30 @@ Menu bar shows `􀫥 CPU%  􀫦 RAM%`. Click to open a details popup.
 open SystemLoad.xcodeproj    # then ⌘R to build & run
 ```
 The Xcode project is generated from `project.yml` with [XcodeGen](https://github.com/yonaskolb/XcodeGen).
-After editing `project.yml`, regenerate with:
+After editing `project.yml` — or adding/removing a source file — regenerate with:
 ```sh
 xcodegen generate
 ```
-All source lives in `SystemLoad/main.swift`. Signing is ad-hoc ("Sign to Run Locally") — no developer team required.
+Source lives in `SystemLoad/` (`main.swift` — metrics + menu bar; `Settings.swift` — preferences store + window; `Updater.swift` — Sparkle). Dev/CI builds are ad-hoc signed ("Sign to Run Locally") — no developer team required. Auto-updates come from [Sparkle](https://sparkle-project.org) (added via Swift Package Manager).
 
-## Build from CLI (no Xcode)
+## Build from CLI
 ```sh
 ./build.sh
 open build/SystemLoad.app
 ```
-Requires Xcode Command Line Tools (`swiftc`).
+`build.sh` wraps `xcodebuild` (a quick unsigned Release build). Sparkle is a Swift Package, so the Xcode toolchain is required — the old raw-`swiftc` path is gone.
 
-## Launch at login
-System Settings → General → Login Items → "+" → select `SystemLoad.app`.
+## Releasing
+Signed, notarized releases (ZIP + DMG) with a Sparkle appcast are produced by `scripts/release.sh` and shipped by `scripts/publish.sh`. See [`scripts/RELEASE.md`](scripts/RELEASE.md).
+
+## Settings
+Open from the menu → **Settings…** (⌘,):
+- **Launch at login** — registers the app as a login item via `SMAppService` (macOS 13+). Takes effect when the app runs from a stable location like `/Applications`; from a `build/` or `DerivedData` copy macOS may refuse to register it.
+- **Refresh interval** — 1 / 2 / 3 / 5 / 10 s.
+- **Menu bar** — show CPU and/or RAM (at least one stays on), and SF Symbol icons vs. plain `CPU`/`RAM` text labels.
+- **Software Update** — toggle automatic update checks (daily) and check now. There's also a **Check for Updates…** item in the menu.
+
+Preferences are stored in `UserDefaults`; launch-at-login state lives in the system (also editable in System Settings → General → Login Items). Update checks use Sparkle against the appcast feed.
 
 ## How metrics are read
 Straight from the kernel, no third-party dependencies:
@@ -42,4 +51,4 @@ Straight from the kernel, no third-party dependencies:
 - network — `getifaddrs` (per-interface byte counters)
 - top processes — `/bin/ps` (only when the menu opens)
 
-Refreshes every 2 s. SF Symbol icons are cached.
+Refreshes every 2 s by default (configurable in Settings). SF Symbol icons are cached.

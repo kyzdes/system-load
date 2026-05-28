@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Darwin
+import Sparkle
 
 // MARK: - Formatting helpers
 
@@ -162,6 +163,10 @@ final class Metrics {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let metrics = Metrics()
+    private let settings = SettingsStore()
+    private let updater = Updater()
+    private var settingsWC: SettingsWindowController?
+    private var settingsObserver: NSObjectProtocol?
     private var timer: Timer?
 
     private var cpuHistory: [Double] = []
@@ -172,8 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var lastNetTime: Date?
     private var rxRate: Double = 0
     private var txRate: Double = 0
-
-    private let interval: TimeInterval = 2.0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Prime delta-based metrics so the first displayed value is real.
@@ -187,9 +190,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         update()
-        let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.update() }
+        startTimer()
+
+        // Re-apply when the user changes anything in the settings window.
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .settingsDidChange, object: nil, queue: .main) { [weak self] _ in
+            self?.applySettings()
+        }
+
+        // Start Sparkle shortly after launch — its start() touches XPC + keychain.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.updater.start()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let token = settingsObserver { NotificationCenter.default.removeObserver(token) }
+    }
+
+    /// (Re)start the sampling timer at the current interval. Invalidating the old
+    /// one first is essential — otherwise changing the interval leaves the previous
+    /// timer running, double-sampling and corrupting the network-rate deltas.
+    private func startTimer() {
+        timer?.invalidate()
+        let t = Timer.scheduledTimer(withTimeInterval: TimeInterval(settings.refreshInterval), repeats: true) { [weak self] _ in self?.update() }
         RunLoop.current.add(t, forMode: .common)
         timer = t
+    }
+
+    private func applySettings() {
+        startTimer()
+        updateTitle(cpu: lastCPU, ram: ramPercent())
     }
 
     // MARK: Sampling
@@ -248,11 +279,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         let textAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+
+        // The settings UI guarantees at least one is on, but never render an empty
+        // (zero-width) title — that would make the menu-bar item appear to vanish.
+        var showCPU = settings.showCPU
+        let showRAM = settings.showRAM
+        if !showCPU && !showRAM { showCPU = true }
+
         let title = NSMutableAttributedString()
-        title.append(symbolAttachment("cpu", fallback: "CPU"))
-        title.append(NSAttributedString(string: String(format: " %.0f%%  ", cpu), attributes: textAttrs))
-        title.append(symbolAttachment("memorychip", fallback: "RAM"))
-        title.append(NSAttributedString(string: String(format: " %.0f%%", ram), attributes: textAttrs))
+        func appendMetric(symbol: String, label: String, value: Double) {
+            if settings.useTextLabels {
+                title.append(NSAttributedString(string: label, attributes: textAttrs))
+            } else {
+                title.append(symbolAttachment(symbol, fallback: label))
+            }
+            title.append(NSAttributedString(string: String(format: " %.0f%%", value), attributes: textAttrs))
+        }
+
+        if showCPU { appendMetric(symbol: "cpu", label: "CPU", value: cpu) }
+        if showCPU && showRAM { title.append(NSAttributedString(string: "  ", attributes: textAttrs)) }
+        if showRAM { appendMetric(symbol: "memorychip", label: "RAM", value: ram) }
         button.attributedTitle = title
     }
 
@@ -326,9 +372,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        let updateItem = NSMenuItem(title: "Check for Updates…",
+                                    action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+                                    keyEquivalent: "")
+        updateItem.target = updater.controller
+        updateItem.isEnabled = updater.canCheckForUpdates   // menu autoenable is off; reflect state manually
+        menu.addItem(updateItem)
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
         menu.addItem(quit)
+    }
+
+    @objc private func openSettings() {
+        if settingsWC == nil { settingsWC = SettingsWindowController(settings: settings, updater: updater) }
+        // The app is an .accessory agent, so it must be activated for the window
+        // to come forward and accept keyboard focus.
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWC?.showWindow(nil)
+        settingsWC?.window?.makeKeyAndOrderFront(nil)
     }
 
     private func padded(_ s: String, _ width: Int) -> String {

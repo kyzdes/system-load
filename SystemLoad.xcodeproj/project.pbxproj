@@ -7,13 +7,34 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4A9F5EA06856CBFD8370045D /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C5D9643D08708983029FDBC3 /* Sparkle */; };
+		7896753B9E69D9630F92C05C /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B97D3C759E6204D7DAA0A7DA /* AppIcon.icns */; };
 		9A8E34527895C31869888933 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5685EDF25CA92801CEB5C2E /* main.swift */; };
+		A919F5D04EB40570AFD5B4E5 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F365830E86C96D45B8CABC92 /* Settings.swift */; };
+		EDEE3607110E36302BE8FB69 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 418D3BA6533D8CE06B82A090 /* Assets.xcassets */; };
+		F1A71E84533B0760EE968D0E /* Updater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9176001C9321AC6C25E2A64A /* Updater.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		418D3BA6533D8CE06B82A090 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		49F570FEB5681B1292BAC827 /* SystemLoad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SystemLoad.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9176001C9321AC6C25E2A64A /* Updater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Updater.swift; sourceTree = "<group>"; };
+		9A0A099187C8CAA125EF6412 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A5685EDF25CA92801CEB5C2E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		B97D3C759E6204D7DAA0A7DA /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		F365830E86C96D45B8CABC92 /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4630C95161414A09F892D60B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A9F5EA06856CBFD8370045D /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		77059C07958A8A4E7114632D = {
@@ -27,9 +48,22 @@
 		AFE2B14675CEB18E0F3EF294 /* SystemLoad */ = {
 			isa = PBXGroup;
 			children = (
+				B8A07B8309BB6145B9744B7E /* Resources */,
+				418D3BA6533D8CE06B82A090 /* Assets.xcassets */,
+				9A0A099187C8CAA125EF6412 /* Info.plist */,
 				A5685EDF25CA92801CEB5C2E /* main.swift */,
+				F365830E86C96D45B8CABC92 /* Settings.swift */,
+				9176001C9321AC6C25E2A64A /* Updater.swift */,
 			);
 			path = SystemLoad;
+			sourceTree = "<group>";
+		};
+		B8A07B8309BB6145B9744B7E /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B97D3C759E6204D7DAA0A7DA /* AppIcon.icns */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		E37B90F08F21777943E470FE /* Products */ = {
@@ -48,6 +82,8 @@
 			buildConfigurationList = 11580E4062968281AD1BAA69 /* Build configuration list for PBXNativeTarget "SystemLoad" */;
 			buildPhases = (
 				8CF61732F1E2B071185F958D /* Sources */,
+				D603C90EABECDAF8A9D33192 /* Resources */,
+				4630C95161414A09F892D60B /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -55,6 +91,7 @@
 			);
 			name = SystemLoad;
 			packageProductDependencies = (
+				C5D9643D08708983029FDBC3 /* Sparkle */,
 			);
 			productName = SystemLoad;
 			productReference = 49F570FEB5681B1292BAC827 /* SystemLoad.app */;
@@ -85,6 +122,9 @@
 			);
 			mainGroup = 77059C07958A8A4E7114632D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FB57BB88A50329D47A720945 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
@@ -94,11 +134,25 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		D603C90EABECDAF8A9D33192 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7896753B9E69D9630F92C05C /* AppIcon.icns in Resources */,
+				EDEE3607110E36302BE8FB69 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		8CF61732F1E2B071185F958D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A919F5D04EB40570AFD5B4E5 /* Settings.swift in Sources */,
+				F1A71E84533B0760EE968D0E /* Updater.swift in Sources */,
 				9A8E34527895C31869888933 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -159,7 +213,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -180,10 +234,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "System Load";
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHighResolutionCapable = YES;
+				INFOPLIST_FILE = SystemLoad/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -241,7 +292,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -261,10 +312,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "System Load";
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHighResolutionCapable = YES;
+				INFOPLIST_FILE = SystemLoad/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -297,6 +345,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FB57BB88A50329D47A720945 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C5D9643D08708983029FDBC3 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57BB88A50329D47A720945 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 460DA8A152D7ADFCA3EE4DE8 /* Project object */;
 }
