@@ -1,0 +1,1070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>System Load — a native macOS menu-bar monitor</title>
+  <meta name="description" content="A lightweight native macOS menu-bar resource monitor. Pure Swift + AppKit — ~40 MB RAM, ~0% CPU at idle. No Electron, no web view. Numbers you can trust." />
+  <link rel="icon" type="image/png" href="assets/icon-256.png" />
+  <meta property="og:title" content="System Load — native macOS resource monitor" />
+  <meta property="og:description" content="CPU, RAM, GPU, network, power — read straight from the kernel. ~40 MB, ~0% idle, zero dependencies." />
+  <meta property="og:image" content="assets/icon-1024.png" />
+
+  <!-- React + Babel (pinned) -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ---- Reset & tokens ---- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        #08090B;
+      --bg-1:      #0C0E12;   /* elevated surface */
+      --bg-2:      #111419;   /* card */
+      --bg-3:      #161a21;   /* card hover / inset */
+      --hair:      rgba(255,255,255,0.07);
+      --hair-2:    rgba(255,255,255,0.12);
+      --ink:       #ECEEF2;
+      --ink-dim:   #9AA1AC;
+      --ink-faint: #5A616C;
+      --green:     #32D74B;   /* load: calm  (locked, == app icon) */
+      --orange:    #FF9F0A;   /* load: busy  (locked) */
+      --red:       #FF453A;   /* load: hot   (locked) */
+      /* accent + numeric font are injected at runtime by the tweak panel */
+      --accent:      #4DD9E6;
+      --accent-ink:  #04181B;
+      --accent-glow: rgba(77,217,230,0.30);
+      --accent-dim:  #2C8E98;
+      --num: 'JetBrains Mono', ui-monospace, monospace;
+
+      --maxw: 1120px;
+      --pad: 32px;
+      --radius: 16px;
+    }
+
+    html { scroll-behavior: smooth; }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      overflow-x: hidden;
+    }
+    /* faint hairline grid + a single cool wash from top — the Nebius "technical" backdrop */
+    body::before {
+      content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      background-image:
+        linear-gradient(to right, var(--hair) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--hair) 1px, transparent 1px);
+      background-size: 64px 64px;
+      -webkit-mask-image: radial-gradient(ellipse 90% 55% at 50% 0%, #000 0%, transparent 75%);
+              mask-image: radial-gradient(ellipse 90% 55% at 50% 0%, #000 0%, transparent 75%);
+      opacity: 0.5;
+    }
+    body::after {
+      content: ''; position: fixed; inset: 0 0 auto 0; height: 70vh; z-index: 0; pointer-events: none;
+      background: radial-gradient(ellipse 70% 100% at 50% -10%, var(--accent-glow), transparent 60%);
+      opacity: 0.5; transition: background .4s ease;
+    }
+    #root { position: relative; z-index: 1; }
+
+    a { color: inherit; text-decoration: none; }
+    ::selection { background: var(--accent); color: var(--accent-ink); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+    .num { font-family: var(--num); font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .wrap { max-width: var(--maxw); margin: 0 auto; padding-left: var(--pad); padding-right: var(--pad); }
+
+    /* ---- Sticky nav ---- */
+    .nav {
+      position: sticky; top: 0; z-index: 50;
+      backdrop-filter: blur(14px) saturate(140%);
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      background: color-mix(in srgb, var(--bg) 72%, transparent);
+      border-bottom: 1px solid transparent;
+      transition: border-color .3s ease, background .3s ease;
+    }
+    .nav[data-scrolled="true"] { border-bottom-color: var(--hair); }
+    .nav-inner { display: flex; align-items: center; gap: 24px; height: 60px; }
+    .wordmark { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
+    .wordmark img { width: 26px; height: 26px; border-radius: 7px; display: block; }
+    .nav-links { display: flex; gap: 26px; margin-left: auto; align-items: center; }
+    .nav-links a { color: var(--ink-dim); font-size: 14px; transition: color .15s ease; }
+    .nav-links a:hover { color: var(--ink); }
+    .nav-cta {
+      opacity: 0; transform: translateY(-6px); pointer-events: none;
+      transition: opacity .3s ease, transform .3s ease;
+    }
+    .nav[data-scrolled="true"] .nav-cta { opacity: 1; transform: none; pointer-events: auto; }
+    .nav-icons { display: none; gap: 6px; margin-left: auto; }
+
+    /* ---- Buttons ---- */
+    .btn {
+      display: inline-flex; align-items: center; gap: 9px; cursor: pointer;
+      font-family: inherit; font-size: 15px; font-weight: 500; line-height: 1;
+      padding: 13px 20px; border-radius: 11px; border: 1px solid transparent;
+      transition: transform .15s ease, box-shadow .25s ease, background .2s ease, border-color .2s ease;
+      white-space: nowrap;
+    }
+    .btn-sm { padding: 9px 15px; font-size: 13.5px; border-radius: 9px; }
+    .btn-primary {
+      background: var(--accent); color: var(--accent-ink); font-weight: 600;
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 8px 30px -8px var(--accent-glow);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 0 1px var(--accent), 0 14px 40px -8px var(--accent-glow); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-ghost { background: var(--bg-2); color: var(--ink); border-color: var(--hair-2); }
+    .btn-ghost:hover { background: var(--bg-3); border-color: var(--accent-dim); transform: translateY(-2px); }
+    .icon-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; border-radius: 10px; background: var(--bg-2);
+      border: 1px solid var(--hair-2); color: var(--ink); cursor: pointer;
+    }
+    .icon-btn:hover { border-color: var(--accent-dim); }
+
+    /* ---- Section scaffolding ---- */
+    section { scroll-margin-top: 76px; position: relative; }
+    .eyebrow {
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.18em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: 14px;
+      display: inline-flex; align-items: center; gap: 9px;
+    }
+    .eyebrow::before { content: ''; width: 22px; height: 1px; background: var(--accent); opacity: .6; }
+    .sec-title { font-size: clamp(26px, 3.4vw, 38px); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+    .sec-sub { color: var(--ink-dim); max-width: 56ch; margin-top: 14px; font-size: 16.5px; }
+    .sec-head { margin-bottom: 44px; }
+
+    /* ---- Hero ---- */
+    .hero { padding-top: clamp(56px, 9vw, 104px); padding-bottom: clamp(48px, 7vw, 88px); }
+    .hero-grid { display: grid; gap: 56px; align-items: center; }
+    .hero[data-comp="twoup"] .hero-grid { grid-template-columns: 1.05fr 0.95fr; }
+    .hero[data-comp="centered"] .hero-grid,
+    .hero[data-comp="fullbleed"] .hero-grid { grid-template-columns: 1fr; }
+    .hero[data-comp="centered"] .hero-copy,
+    .hero[data-comp="fullbleed"] .hero-copy { text-align: center; align-items: center; max-width: 760px; margin: 0 auto; }
+    .hero-copy { display: flex; flex-direction: column; align-items: flex-start; }
+    .hero h1 {
+      font-size: clamp(34px, 5.4vw, 60px); font-weight: 700; letter-spacing: -0.03em;
+      line-height: 1.02; margin: 20px 0 0;
+    }
+    .hero h1 .accent { color: var(--accent); }
+    .hero-sub { color: var(--ink-dim); font-size: clamp(16px, 1.5vw, 19px); margin-top: 22px; max-width: 54ch; line-height: 1.55; }
+    .hero[data-comp="centered"] .hero-sub, .hero[data-comp="fullbleed"] .hero-sub { margin-left: auto; margin-right: auto; }
+    .hero-cta { display: flex; gap: 14px; margin-top: 34px; flex-wrap: wrap; }
+    .hero[data-comp="centered"] .hero-cta, .hero[data-comp="fullbleed"] .hero-cta { justify-content: center; }
+    .req { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--ink-faint); margin-top: 22px; letter-spacing: .01em; }
+    .req b { color: var(--ink-dim); font-weight: 500; }
+    .install-hint {
+      margin-top: 16px; font-size: 13.5px; color: var(--ink-dim);
+      border: 1px dashed var(--accent-dim); border-radius: 10px; padding: 10px 14px;
+      display: flex; align-items: center; gap: 9px; background: color-mix(in srgb, var(--accent) 7%, transparent);
+    }
+    .nonmac-banner {
+      display: inline-flex; align-items: center; gap: 9px; margin-bottom: 6px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--ink-dim);
+      background: var(--bg-2); border: 1px solid var(--hair); border-radius: 999px; padding: 7px 14px;
+    }
+    .nonmac-banner .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--orange); }
+
+    /* full-bleed: oversized readout behind, screenshot peeking from bottom */
+    .hero[data-comp="fullbleed"] .hero-visual { margin-top: 52px; }
+    .hero[data-comp="fullbleed"] .popup-card { transform: none; }
+
+    /* ---- Menu-bar pill mock ---- */
+    .menubar {
+      display: inline-flex; align-items: center; gap: 0;
+      background: linear-gradient(180deg, rgba(40,44,52,.92), rgba(24,27,33,.92));
+      border: 1px solid var(--hair-2); border-radius: 8px; padding: 5px 4px;
+      box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 10px 30px -12px rgba(0,0,0,.8);
+      backdrop-filter: blur(6px);
+    }
+    .menubar .pill {
+      display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 6px;
+      font-family: var(--num); font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums;
+    }
+    .menubar .pill.hot { color: #fff; }
+    .menubar .sep { width: 1px; height: 16px; background: var(--hair-2); margin: 0 2px; }
+    .menubar .glyph { color: var(--ink-dim); display: inline-flex; }
+
+    /* ---- popup readout (faithful reconstruction of the NSMenu) ---- */
+    .popup-card {
+      position: relative;
+      background: linear-gradient(180deg, rgba(30,32,38,.98), rgba(22,24,29,.98));
+      border: 1px solid var(--hair-2);
+      border-radius: 14px; padding: 9px;
+      box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 40px 90px -30px rgba(0,0,0,.9), 0 0 0 1px rgba(0,0,0,.5);
+      font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.0;
+      width: 100%; max-width: 380px;
+    }
+    .hero[data-comp="twoup"] .popup-card { transform: perspective(1400px) rotateY(-9deg) rotateX(3deg); transform-origin: left center; }
+    .hero[data-comp="centered"] .popup-card { margin: 0 auto; }
+    .popup-card .titlebar { display: flex; gap: 6px; padding: 5px 7px 9px; }
+    .popup-card .tl { width: 9px; height: 9px; border-radius: 50%; opacity: .55; }
+    .row { display: flex; align-items: center; gap: 10px; padding: 5px 9px; border-radius: 6px; white-space: nowrap; }
+    .row:hover { background: rgba(255,255,255,.04); }
+    .row .lbl { width: 92px; color: var(--ink-dim); flex-shrink: 0; }
+    .row .val { font-variant-numeric: tabular-nums; }
+    .row .spark { letter-spacing: -1px; }
+    .row .extra { color: var(--ink-dim); margin-left: auto; }
+    .green { color: var(--green); } .orange { color: var(--orange); } .red { color: var(--red); }
+    .menu-sep { height: 1px; background: var(--hair); margin: 6px 9px; }
+    .row.head { color: var(--ink); font-weight: 600; padding-bottom: 2px; }
+    .row.sub { padding-top: 2px; padding-bottom: 2px; }
+    .row.sub .lbl { width: 150px; color: var(--ink); }
+    .row.action { color: var(--ink-dim); justify-content: space-between; }
+    .row.action .kbd { color: var(--ink-faint); }
+    /* annotation callouts */
+    .callout {
+      position: absolute; font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      color: var(--accent); display: flex; align-items: center; gap: 8px; pointer-events: none;
+      white-space: nowrap;
+    }
+    .callout .line { width: 30px; height: 1px; background: var(--accent); opacity: .5; }
+    .callout .dot { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--accent); }
+    .callout.right { right: -16px; transform: translateX(100%); }
+    .callout.right .line { order: -1; }
+
+    /* ---- value props ---- */
+    .props { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: var(--radius); overflow: hidden; }
+    .prop { background: var(--bg-1); padding: 28px 24px; transition: background .2s ease; }
+    .prop:hover { background: var(--bg-2); }
+    .prop .gi { color: var(--accent); margin-bottom: 18px; display: inline-flex; }
+    .prop h3 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 8px; }
+    .prop p { color: var(--ink-dim); font-size: 14px; line-height: 1.55; }
+
+    /* ---- metrics ---- */
+    .metrics-bento { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; grid-auto-rows: 1fr; }
+    .mcard { background: var(--bg-1); border: 1px solid var(--hair); border-radius: 14px; padding: 20px; transition: border-color .2s, transform .2s, background .2s; position: relative; overflow: hidden; }
+    .mcard:hover { border-color: var(--hair-2); transform: translateY(-3px); background: var(--bg-2); }
+    .mcard .gi { color: var(--ink-dim); margin-bottom: 14px; display: inline-flex; }
+    .mcard h4 { font-size: 15px; font-weight: 600; margin-bottom: 6px; letter-spacing: -0.01em; }
+    .mcard p { color: var(--ink-dim); font-size: 13.5px; line-height: 1.5; }
+    .mcard.span2 { grid-column: span 2; }
+    .mcard .reading { font-family: var(--num); font-variant-numeric: tabular-nums; margin-top: 14px; font-size: 13px; color: var(--ink-faint); display: flex; align-items: baseline; gap: 8px; }
+
+    .metrics-list { border: 1px solid var(--hair); border-radius: var(--radius); overflow: hidden; }
+    .mrow { display: flex; align-items: center; gap: 18px; padding: 18px 22px; background: var(--bg-1); border-bottom: 1px solid var(--hair); transition: background .15s ease; }
+    .mrow:last-child { border-bottom: none; }
+    .mrow:hover { background: var(--bg-2); }
+    .mrow .gi { color: var(--accent); flex-shrink: 0; display: inline-flex; }
+    .mrow .mname { width: 168px; flex-shrink: 0; font-weight: 600; font-size: 15px; }
+    .mrow .mdesc { color: var(--ink-dim); font-size: 14px; }
+    @media (max-width: 600px){ .mrow .mname { width: auto; } .mrow { flex-wrap: wrap; gap: 6px 14px; } .mrow .mdesc { flex-basis: 100%; padding-left: 38px; } }
+
+    .tabs { display: flex; gap: 6px; margin-bottom: 22px; flex-wrap: wrap; }
+    .tab { font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--hair); background: var(--bg-1); color: var(--ink-dim); cursor: pointer; transition: all .15s ease; }
+    .tab[data-active="true"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+    .tab:not([data-active="true"]):hover { color: var(--ink); border-color: var(--hair-2); }
+    .tab .cnt { opacity: .6; margin-left: 6px; }
+
+    /* sparkline */
+    .sparkbox { width: 100%; height: 46px; margin-top: 14px; }
+
+    /* ---- under the hood ---- */
+    .hood-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: start; }
+    .api-list { border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg-1); overflow: hidden; }
+    .api { display: flex; align-items: baseline; gap: 16px; padding: 15px 20px; border-bottom: 1px solid var(--hair); font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+    .api:last-child { border-bottom: none; }
+    .api code { color: var(--accent); white-space: nowrap; }
+    .api .what { color: var(--ink-dim); margin-left: auto; font-size: 12.5px; text-align: right; }
+    .trust { display: flex; flex-direction: column; gap: 14px; }
+    .trust .claim { display: flex; align-items: center; gap: 13px; font-size: 16px; font-weight: 500; }
+    .trust .claim .chk { color: var(--green); flex-shrink: 0; display: inline-flex; }
+    .trust .note { color: var(--ink-dim); font-size: 14px; line-height: 1.55; margin-top: 6px; border-left: 2px solid var(--hair-2); padding-left: 16px; }
+
+    /* ---- download / footer ---- */
+    .download { text-align: center; padding: clamp(56px,8vw,96px) 0; }
+    .dl-card {
+      border: 1px solid var(--hair-2); border-radius: 22px; padding: clamp(36px,5vw,64px);
+      background: radial-gradient(ellipse 120% 140% at 50% 0%, color-mix(in srgb, var(--accent) 9%, var(--bg-1)), var(--bg-1));
+      position: relative; overflow: hidden;
+    }
+    .dl-card h2 { font-size: clamp(28px,4vw,44px); font-weight: 700; letter-spacing: -0.025em; line-height: 1.05; }
+    .dl-card .sub { color: var(--ink-dim); margin-top: 16px; font-size: 17px; }
+    .dl-actions { display: flex; gap: 14px; justify-content: center; margin-top: 32px; flex-wrap: wrap; }
+    .reassure { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--ink-faint); margin-top: 20px; display: inline-flex; align-items: center; gap: 8px; }
+    .reassure .chk { color: var(--green); display: inline-flex; }
+
+    footer { border-top: 1px solid var(--hair); margin-top: 8px; padding: 40px 0 56px; }
+    .foot { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; justify-content: space-between; }
+    .foot .meta { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--ink-faint); line-height: 1.8; }
+    .foot .links { display: flex; gap: 22px; font-size: 14px; }
+    .foot .links a { color: var(--ink-dim); } .foot .links a:hover { color: var(--ink); }
+
+    .spacer-lg { height: clamp(72px, 10vw, 132px); }
+    .spacer-md { height: clamp(48px, 7vw, 88px); }
+
+    /* ---- toast ---- */
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(0);
+      background: var(--bg-2); border: 1px solid var(--accent-dim); color: var(--ink);
+      padding: 12px 20px; border-radius: 11px; font-size: 14px; z-index: 200;
+      box-shadow: 0 18px 50px -12px rgba(0,0,0,.7); display: flex; align-items: center; gap: 10px;
+      animation: toastIn .25s ease;
+    }
+    @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(12px); } }
+
+    /* ---- tweak panel ---- */
+    .tw-toggle {
+      position: fixed; bottom: 22px; right: 22px; z-index: 150;
+      display: inline-flex; align-items: center; gap: 9px;
+      background: var(--bg-2); color: var(--ink); border: 1px solid var(--hair-2);
+      border-radius: 999px; padding: 10px 16px; font-size: 13px; font-family: 'JetBrains Mono', monospace;
+      cursor: pointer; box-shadow: 0 10px 30px -10px rgba(0,0,0,.6);
+    }
+    .tw-toggle:hover { border-color: var(--accent); }
+    .tw-toggle .led { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+    .tw-panel {
+      position: fixed; bottom: 22px; right: 22px; z-index: 151; width: 304px; max-height: calc(100vh - 44px); overflow-y: auto;
+      background: color-mix(in srgb, var(--bg-1) 94%, transparent); backdrop-filter: blur(16px);
+      border: 1px solid var(--hair-2); border-radius: 16px; padding: 18px;
+      box-shadow: 0 24px 70px -16px rgba(0,0,0,.8); font-size: 13px;
+    }
+    .tw-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+    .tw-head strong { font-size: 14px; letter-spacing: -0.01em; }
+    .tw-head .x { background: none; border: none; color: var(--ink-dim); cursor: pointer; font-size: 18px; line-height: 1; }
+    .tw-note { color: var(--ink-faint); font-size: 11.5px; margin-bottom: 14px; line-height: 1.4; }
+    .tw-group { margin-top: 16px; }
+    .tw-group > .gh { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+    .tw-group > .gh::after { content: ''; flex: 1; height: 1px; background: var(--hair); }
+    .tw-field { margin-bottom: 12px; }
+    .tw-field > .fl { color: var(--ink-dim); margin-bottom: 6px; display: flex; justify-content: space-between; }
+    .tw-field > .fl .ref { color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+    .seg { display: flex; gap: 4px; background: var(--bg-3); border: 1px solid var(--hair); border-radius: 9px; padding: 3px; }
+    .seg button { flex: 1; border: none; background: none; color: var(--ink-dim); font-family: inherit; font-size: 12px; padding: 7px 4px; border-radius: 6px; cursor: pointer; transition: all .12s ease; white-space: nowrap; }
+    .seg button[data-on="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 1px 0 var(--hair-2); }
+    .seg.accent button[data-on="true"] { color: var(--accent); }
+    .swatches { display: flex; gap: 8px; }
+    .swatch { flex: 1; height: 38px; border-radius: 9px; border: 1px solid var(--hair-2); cursor: pointer; position: relative; transition: transform .12s ease; }
+    .swatch:hover { transform: translateY(-2px); }
+    .swatch[data-on="true"] { outline: 2px solid var(--ink); outline-offset: 2px; }
+    .swatch .cap { position: absolute; bottom: 4px; left: 0; right: 0; text-align: center; font-size: 9px; color: rgba(0,0,0,.6); font-weight: 600; }
+    .tw-switch { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; }
+    .tw-switch .track { width: 38px; height: 22px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--hair-2); position: relative; cursor: pointer; transition: background .15s; flex-shrink: 0; }
+    .tw-switch .track[data-on="true"] { background: var(--accent); border-color: var(--accent); }
+    .tw-switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s ease; }
+    .tw-switch .track[data-on="true"] .knob { transform: translateX(16px); }
+    .tw-reset { width: 100%; margin-top: 14px; padding: 9px; background: var(--bg-3); border: 1px solid var(--hair); color: var(--ink-dim); border-radius: 9px; cursor: pointer; font-family: inherit; font-size: 12px; }
+    .tw-reset:hover { color: var(--ink); border-color: var(--hair-2); }
+
+    /* =================== RESPONSIVE =================== */
+    @media (max-width: 1023px) {
+      :root { --pad: 24px; }
+      .hero[data-comp="twoup"] .hero-grid { grid-template-columns: 1fr; }
+      .hero[data-comp="twoup"] .popup-card { transform: none; margin: 0 auto; }
+      .hero-copy { align-items: flex-start; }
+      .props { grid-template-columns: repeat(2, 1fr); }
+      .metrics-bento { grid-template-columns: repeat(2, 1fr); }
+      .mcard.span2 { grid-column: span 2; }
+      .hood-grid { grid-template-columns: 1fr; gap: 32px; }
+      .callout { display: none; }       /* annotations hidden < 768 per §8.3 (and tablet) */
+    }
+    @media (max-width: 767px) {
+      :root { --pad: 18px; }
+      .nav-links { display: none; }
+      .nav-icons { display: flex; }
+      .nav .nav-cta { display: none; }
+      .hero-grid { gap: 38px; }
+      .hero h1 { font-size: clamp(30px, 9vw, 42px); }
+      .hero-cta { width: 100%; }
+      .hero-cta .btn-primary { width: 100%; justify-content: center; }
+      .props { grid-template-columns: 1fr; }
+      .metrics-bento { grid-template-columns: 1fr; }
+      .mcard.span2 { grid-column: span 1; }
+      .popup-card { max-width: 100%; font-size: 11.5px; }
+      .row .lbl { width: 80px; }
+      .foot { flex-direction: column; align-items: flex-start; gap: 18px; }
+      .tw-panel { width: calc(100vw - 28px); right: 14px; bottom: 14px; }
+      .tw-toggle { right: 14px; bottom: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    /* ------------------------------------------------------------------ *
+     *  System Load · hi-fi-static landing  (per ux-spec 2026-05-28)
+     *  Direction: Nebius-dark techno-minimalism · density: Restrained
+     *  Tweak panel explores §8.4 dimensions + §8.5 details (floating, no sidebar)
+     *  OPEN QUESTIONS baked as placeholders, not invented:
+     *    Q1 headline copy  → sharp default below, marked PLACEHOLDER
+     *    Q2 license name   → "see repository" link, not fabricated
+     * ------------------------------------------------------------------ */
+
+    const REPO = "https://github.com/kyzdes/system-load";
+    const DMG  = "https://github.com/kyzdes/system-load/releases/latest/download/SystemLoad.dmg";
+    const VERSION = "1.0.2";
+
+    /* §8.4 DIM 3 — accent treatments (load colors green/orange/red stay locked & semantic) */
+    const ACCENTS = {
+      cyan: { label: "Cyan",   accent: "#4DD9E6", ink: "#04181B", glow: "rgba(77,217,230,0.30)", dim: "#2C8E98" },
+      lime: { label: "Lime",   accent: "#C6F24E", ink: "#16200A", glow: "rgba(198,242,78,0.26)", dim: "#7E9A2E" },
+      warm: { label: "Warm",   accent: "#E6B173", ink: "#23160A", glow: "rgba(230,177,115,0.22)", dim: "#9A7A4E" },
+    };
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      accent: "cyan",        // §8.4 DIM 3
+      heroComp: "twoup",     // §8.4 DIM 1: twoup | centered | fullbleed
+      metrics: "bento",      // §8.4 DIM 2: bento | list | tabbed
+      numFont: "mono",       // §8.5: mono | sans
+      pillStyle: "glyph",    // §8.5: glyph | text
+      sparkAnim: true,       // §8.5: live ticking sparkline
+      callouts: true,        // §8.5: annotation callouts on the popup
+      platform: "mac",       // PREVIEW aid (auto-detected at load): mac | other
+    }/*EDITMODE-END*/;
+
+    function useTweaks() {
+      const [tweaks, setTweaks] = useState(() => {
+        let base = { ...TWEAK_DEFAULTS };
+        // auto-detect platform once (overridable in the panel for preview)
+        try {
+          const ua = navigator.userAgent;
+          const isMacDesktop = /Macintosh/.test(ua) && !/(iPhone|iPad|Android)/.test(ua);
+          base.platform = isMacDesktop ? "mac" : "other";
+        } catch (e) {}
+        try {
+          const stored = localStorage.getItem('sysload-tweaks');
+          if (stored) base = { ...base, ...JSON.parse(stored) };
+        } catch (e) {}
+        return base;
+      });
+      const update = (patch) => {
+        setTweaks(prev => {
+          const next = { ...prev, ...patch };
+          try { localStorage.setItem('sysload-tweaks', JSON.stringify(next)); } catch (e) {}
+          return next;
+        });
+      };
+      const reset = () => {
+        try { localStorage.removeItem('sysload-tweaks'); } catch (e) {}
+        let base = { ...TWEAK_DEFAULTS };
+        try {
+          const ua = navigator.userAgent;
+          base.platform = (/Macintosh/.test(ua) && !/(iPhone|iPad|Android)/.test(ua)) ? "mac" : "other";
+        } catch (e) {}
+        setTweaks(base);
+      };
+      return { tweaks, update, reset };
+    }
+
+    /* ---------- viewport hook (drives behaviour, not layout) ---------- */
+    function useViewport() {
+      const [w, setW] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1200));
+      useEffect(() => {
+        const on = () => setW(window.innerWidth);
+        window.addEventListener('resize', on);
+        return () => window.removeEventListener('resize', on);
+      }, []);
+      return { w, isMobile: w <= 767, isTablet: w > 767 && w <= 1023 };
+    }
+
+    const prefersReducedMotion = () => {
+      try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+    };
+
+    /* ---------------- icon glyphs (minimal SF-symbol-style) ---------------- */
+    function Glyph({ name, size = 20 }) {
+      const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+        stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" };
+      switch (name) {
+        case "cpu": return (<svg {...p}><rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="10" y="10" width="4" height="4" rx="0.5"/><path d="M9 7V4.5M12 7V4.5M15 7V4.5M9 17v2.5M12 17v2.5M15 17v2.5M7 9H4.5M7 12H4.5M7 15H4.5M17 9h2.5M17 12h2.5M17 15h2.5"/></svg>);
+        case "ram": return (<svg {...p}><rect x="3" y="8" width="18" height="9" rx="1.5"/><path d="M7 8v-2M11 8v-2M15 8v-2M19 8v-2"/><path d="M7 12.5v1M11 12.5v1M15 12.5v1"/></svg>);
+        case "pressure": return (<svg {...p}><path d="M12 13l4-4"/><circle cx="12" cy="13" r="0.8" fill="currentColor"/><path d="M4 14a8 8 0 0 1 16 0"/><path d="M4 14h1.5M18.5 14H20M12 6V4.5"/></svg>);
+        case "swap": return (<svg {...p}><path d="M7 7h10l-3-3M17 17H7l3 3"/></svg>);
+        case "network": return (<svg {...p}><path d="M9 4v11M9 15l-3-3M9 15l3-3M15 20V9M15 9l-3 3M15 9l3 3"/></svg>);
+        case "gpu": return (<svg {...p}><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="9" cy="12" r="2.4"/><path d="M14 10h4M14 13h4"/></svg>);
+        case "disk": return (<svg {...p}><ellipse cx="12" cy="6.5" rx="7" ry="2.6"/><path d="M5 6.5v11c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-11M5 12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6"/></svg>);
+        case "battery": return (<svg {...p}><rect x="3" y="8" width="16" height="9" rx="2"/><path d="M21 11v3"/><path d="M6 11v3M9 11v3M12 11v3"/></svg>);
+        case "thermal": return (<svg {...p}><path d="M12 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/><path d="M10 14.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" fill="currentColor" stroke="none"/></svg>);
+        case "top": return (<svg {...p}><path d="M4 18V11M9 18V7M14 18v-4M19 18V5"/></svg>);
+        case "native": return (<svg {...p}><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>);
+        case "feather": return (<svg {...p}><path d="M19 5c-2 0-4 .5-6 2.5L7 13.5V17h3.5l6-6C18.5 9 19 7 19 5z"/><path d="M7 17l-3 3M14 8l-5 5"/></svg>);
+        case "target": return (<svg {...p}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.8" fill="currentColor"/></svg>);
+        case "lock": return (<svg {...p}><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>);
+        case "check": return (<svg {...p}><path d="M5 12.5l4.5 4.5L19 7"/></svg>);
+        case "github": return (<svg {...p} strokeWidth="0" fill="currentColor"><path d="M12 2C6.5 2 2 6.6 2 12.3c0 4.5 2.9 8.4 6.8 9.8.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.4-3.4-1.4-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9 9 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5 3.9-1.4 6.8-5.3 6.8-9.8C22 6.6 17.5 2 12 2z"/></svg>);
+        default: return null;
+      }
+    }
+
+    /* ---------------- menu-bar pill mock ---------------- */
+    function MenuBar({ pillStyle, cpu, ram }) {
+      const cpuHot = cpu >= 60, ramHot = ram >= 60;
+      const Item = ({ glyph, label, value, hot }) => (
+        <span className={"pill" + (hot ? " hot" : "")}>
+          {pillStyle === "glyph"
+            ? <span className="glyph"><Glyph name={glyph} size={15} /></span>
+            : <span style={{ color: "var(--ink-dim)", fontSize: 12 }}>{label}</span>}
+          <span>{Math.round(value)}%</span>
+        </span>
+      );
+      return (
+        <div className="menubar" role="img" aria-label={`Menu bar showing CPU ${Math.round(cpu)} percent and RAM ${Math.round(ram)} percent`}>
+          <Item glyph="cpu" label="CPU" value={cpu} hot={cpuHot} />
+          <span className="sep" />
+          <Item glyph="ram" label="RAM" value={ram} hot={ramHot} />
+        </div>
+      );
+    }
+
+    /* ---------------- unicode block sparkline (popup fidelity) ---------------- */
+    const BLOCKS = "▁▂▃▄▅▆▇█".split("");
+    function blockSpark(vals) {
+      return vals.slice(-16).map(v => BLOCKS[Math.max(0, Math.min(7, Math.round((v/100)*7)))]).join("");
+    }
+    const loadClass = (v) => v >= 85 ? "red" : v >= 60 ? "orange" : "green";
+
+    /* ---------------- SVG sparkline (CPU metric card) ---------------- */
+    function SvgSpark({ vals }) {
+      const W = 240, H = 46;
+      const pts = vals.map((v, i) => {
+        const x = (i / (vals.length - 1)) * W;
+        const y = H - (v / 100) * (H - 4) - 2;
+        return [x, y];
+      });
+      const d = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+      const area = d + ` L${W} ${H} L0 ${H} Z`;
+      const cur = vals[vals.length - 1];
+      const col = cur >= 85 ? "var(--red)" : cur >= 60 ? "var(--orange)" : "var(--green)";
+      return (
+        <svg className="sparkbox" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+          <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={col} stopOpacity="0.28" /><stop offset="1" stopColor={col} stopOpacity="0" />
+          </linearGradient></defs>
+          <path d={area} fill="url(#sg)" />
+          <path d={d} fill="none" stroke={col} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+          <circle cx={pts[pts.length-1][0]} cy={pts[pts.length-1][1]} r="2.4" fill={col} />
+        </svg>
+      );
+    }
+
+    /* ---------------- live metric simulator ---------------- */
+    function useLiveMetrics(animate) {
+      const [hist, setHist] = useState(() => {
+        const a = []; let v = 22;
+        for (let i = 0; i < 32; i++) { v = Math.max(6, Math.min(96, v + (Math.sin(i/3)*7) + (i%5-2)*3)); a.push(v); }
+        return a;
+      });
+      useEffect(() => {
+        if (!animate) return;
+        const id = setInterval(() => {
+          setHist(prev => {
+            const last = prev[prev.length - 1];
+            let next = last + (Math.random() - 0.48) * 18;
+            if (Math.random() < 0.12) next += (Math.random() - 0.5) * 40; // occasional spike
+            next = Math.max(5, Math.min(97, next));
+            return [...prev.slice(1), next];
+          });
+        }, 1300);
+        return () => clearInterval(id);
+      }, [animate]);
+      return hist;
+    }
+
+    /* ---------------- popup readout (faithful NSMenu reconstruction) ---------------- */
+    function PopupReadout({ cpuHist, callouts }) {
+      const cpu = cpuHist[cpuHist.length - 1];
+      const gpu = 12, ram = 61, bat = 84;
+      const Row = ({ lbl, children, cls = "", extra }) => (
+        <div className={"row " + cls}>
+          <span className="lbl">{lbl}</span>
+          <span className="val">{children}</span>
+          {extra && <span className="extra">{extra}</span>}
+        </div>
+      );
+      return (
+        <div className="popup-card">
+          <div className="titlebar">
+            <span className="tl" style={{ background: "#FF5F57" }} />
+            <span className="tl" style={{ background: "#FEBC2E" }} />
+            <span className="tl" style={{ background: "#28C840" }} />
+          </div>
+
+          <div className={"row " + loadClass(cpu)} style={{ position: "relative" }}>
+            <span className="lbl">CPU</span>
+            <span className="val" style={{ width: 34 }}>{Math.round(cpu)}%</span>
+            <span className="spark">{blockSpark(cpuHist)}</span>
+            {callouts && <span className="callout right" style={{ top: "50%", marginTop: -6 }}><span className="dot" /><span className="line" />~2-min history</span>}
+          </div>
+          <div className={"row " + loadClass(gpu)}>
+            <span className="lbl">GPU</span><span className="val" style={{ width: 34 }}>{gpu}%</span>
+            <span className="spark">▁▂▁▁▂▃▂▁▁▂</span><span className="extra">1.2 GB</span>
+          </div>
+          <Row lbl="RAM" cls={loadClass(ram)}><span style={{ width: 34, display: "inline-block" }}>{ram}%</span>9.8 / 16.0 GB</Row>
+          <div className="row green" style={{ position: "relative" }}>
+            <span className="lbl">Compressed</span><span className="val">1.2 GB</span>
+            <span className="extra" style={{ color: "var(--green)" }}>🟢 Normal</span>
+            {callouts && <span className="callout right" style={{ top: "50%", marginTop: -6 }}><span className="dot" /><span className="line" />real pressure signal</span>}
+          </div>
+          <Row lbl="Swap">0.0 / 2.0 GB</Row>
+          <Row lbl="Disk" extra="↑ 0 B/s">↓ 2.1 MB/s</Row>
+          <Row lbl="Network" extra="↑ 12 KB/s">↓ 120 KB/s</Row>
+
+          <div className="menu-sep" />
+          <Row lbl="Battery" cls="green" extra="⚡ 2:14 left"><span style={{ width: 34, display: "inline-block" }}>{bat}%</span></Row>
+          <Row lbl="Thermal"><span className="green">🟢 Nominal</span></Row>
+
+          <div className="menu-sep" />
+          <div style={{ position: "relative" }}>
+            <div className="row head">Top CPU</div>
+            <div className="row sub"><span className="lbl">Safari</span><span className="extra">23.4%</span></div>
+            <div className="row sub"><span className="lbl">WindowServer</span><span className="extra">9.1%</span></div>
+            <div className="row sub"><span className="lbl">kernel_task</span><span className="extra">6.7%</span></div>
+            <div className="row head">Top RAM</div>
+            <div className="row sub"><span className="lbl">Xcode</span><span className="extra">4.2 GB</span></div>
+            <div className="row sub"><span className="lbl">Google Chrome</span><span className="extra">2.1 GB</span></div>
+            <div className="row sub"><span className="lbl">Figma</span><span className="extra">1.8 GB</span></div>
+            {callouts && <span className="callout right" style={{ top: 18 }}><span className="dot" /><span className="line" />sampled on open</span>}
+          </div>
+
+          <div className="menu-sep" />
+          <div className="row action"><span>Check for Updates…</span></div>
+          <div className="row action"><span>Settings…</span><span className="kbd">⌘,</span></div>
+          <div className="row action"><span>Quit</span><span className="kbd">⌘Q</span></div>
+        </div>
+      );
+    }
+
+    /* ==================================================================== */
+    /*  SECTIONS                                                            */
+    /* ==================================================================== */
+
+    function Nav({ tweaks, onDownload }) {
+      const [scrolled, setScrolled] = useState(false);
+      useEffect(() => {
+        const on = () => setScrolled(window.scrollY > window.innerHeight * 0.62);
+        on(); window.addEventListener('scroll', on, { passive: true });
+        return () => window.removeEventListener('scroll', on);
+      }, []);
+      const canDl = tweaks.platform === "mac";
+      return (
+        <nav className="nav" data-scrolled={scrolled}>
+          <div className="wrap nav-inner">
+            <a href="#top" className="wordmark"><img src="assets/icon-256.png" alt="System Load" /> System&nbsp;Load</a>
+            <div className="nav-links">
+              <a href="#why">Why different</a>
+              <a href="#features">What it shows</a>
+              <a href="#hood">Under the hood</a>
+              <a href={REPO} target="_blank" rel="noopener">GitHub ↗</a>
+              <button className="btn btn-primary btn-sm nav-cta" onClick={onDownload}>
+                {canDl ? "Download" : "Copy link"}
+              </button>
+            </div>
+            <div className="nav-icons">
+              <a className="icon-btn" href={REPO} target="_blank" rel="noopener" aria-label="GitHub"><Glyph name="github" size={18} /></a>
+              <button className="icon-btn" onClick={onDownload} aria-label="Download" style={{ background: "var(--accent)", color: "var(--accent-ink)", borderColor: "transparent" }}>
+                <Glyph name="feather" size={18} />
+              </button>
+            </div>
+          </div>
+        </nav>
+      );
+    }
+
+    function Hero({ tweaks, cpuHist, onDownload, showHint }) {
+      const cpu = cpuHist[cpuHist.length - 1];
+      const canDl = tweaks.platform === "mac";
+      return (
+        <section id="top" className="hero wrap" data-comp={tweaks.heroComp}>
+          <div className="hero-grid">
+            <div className="hero-copy">
+              {!canDl && (
+                <span className="nonmac-banner"><span className="dot" /> Best installed on a Mac · macOS 13+</span>
+              )}
+              <MenuBar pillStyle={tweaks.pillStyle} cpu={cpu} ram={61} />
+              {/* Q1 PLACEHOLDER headline — sharp default, swap when copy is final */}
+              <h1>Always know what<br /><span className="accent">your Mac is doing.</span></h1>
+              <p className="hero-sub">
+                A menu-bar resource monitor in pure Swift&nbsp;+&nbsp;AppKit — CPU, RAM, GPU,
+                network and power read straight from the kernel. <b style={{color:"var(--ink)"}}>~40&nbsp;MB</b>, <b style={{color:"var(--ink)"}}>~0%&nbsp;CPU</b> at idle.
+                No Electron, no web view, zero dependencies.
+              </p>
+              <div className="hero-cta">
+                <button className="btn btn-primary" onClick={onDownload}>
+                  {canDl
+                    ? <><Glyph name="feather" size={17} /> Download for macOS</>
+                    : <><Glyph name="feather" size={17} /> Copy link / Email it to myself</>}
+                </button>
+                <a className="btn btn-ghost" href={REPO} target="_blank" rel="noopener"><Glyph name="github" size={17} /> View on GitHub</a>
+              </div>
+              {!canDl && <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"var(--ink-faint)",marginTop:10}}>Install on your Mac — a macOS app can't run on this device.</div>}
+              <div className="req">macOS&nbsp;13+ &nbsp;·&nbsp; <b>v{VERSION}</b> &nbsp;·&nbsp; Universal &nbsp;·&nbsp; Free&nbsp;&amp;&nbsp;open&nbsp;source</div>
+              {showHint && (
+                <div className="install-hint"><Glyph name="check" size={16} /> Open the DMG → drag <b style={{color:"var(--ink)"}}>System&nbsp;Load</b> to Applications.</div>
+              )}
+            </div>
+            <div className="hero-visual">
+              {/* callouts live on the dedicated showcase (room to breathe) — keep the hero readout clean */}
+              <PopupReadout cpuHist={cpuHist} callouts={false} />
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    const PROPS = [
+      { g: "native", t: "Native, not Electron", b: "Pure Swift + AppKit. No web view, no bundled browser. It behaves like a Mac app because it is one." },
+      { g: "feather", t: "Featherweight", b: "~40 MB resident, ~0% CPU at idle. It watches your machine without becoming part of the load." },
+      { g: "target", t: "Numbers you can trust", b: "RAM the Activity-Monitor way (App + Wired + Compressed) — plus the real memory-pressure signal." },
+      { g: "lock", t: "Private by default", b: "No network, no third-party deps, no elevated privileges. It reads the kernel and shows the result." },
+    ];
+    function WhyDifferent() {
+      return (
+        <section id="why" className="wrap">
+          <div className="sec-head">
+            <span className="eyebrow">Why it's different</span>
+            <h2 className="sec-title">Built like a tool, not a tab.</h2>
+            <p className="sec-sub">Four things every other "system monitor" should get right — and usually doesn't.</p>
+          </div>
+          <div className="props">
+            {PROPS.map((p, i) => (
+              <div className="prop" key={i}>
+                <span className="gi"><Glyph name={p.g} size={26} /></span>
+                <h3>{p.t}</h3><p>{p.b}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
+    const METRICS = [
+      { g:"cpu",      n:"CPU",            d:"Load % with a ~2-min history sparkline, color-coded.", cat:"Compute", big:true },
+      { g:"gpu",      n:"GPU",            d:"Utilization, history and VRAM in use.", cat:"Compute" },
+      { g:"top",      n:"Top processes",  d:"Top 3 by CPU and top 3 by RAM, sampled on open.", cat:"Compute" },
+      { g:"ram",      n:"RAM",            d:"Used % and GB, computed the Activity-Monitor way.", cat:"Memory" },
+      { g:"pressure", n:"Memory pressure",d:"Compressor size + 🟢/🟡/🔴 — the real low-memory signal.", cat:"Memory" },
+      { g:"swap",     n:"Swap",           d:"Used / total, or “not in use” when it isn't.", cat:"Memory" },
+      { g:"disk",     n:"Disk I/O",       d:"↓ read / ↑ write throughput.", cat:"I/O" },
+      { g:"network",  n:"Network",        d:"↓ / ↑ throughput, per-interface byte counters.", cat:"I/O" },
+      { g:"battery",  n:"Battery",        d:"Charge %, charging state, time remaining.", cat:"Power" },
+      { g:"thermal",  n:"Thermal",        d:"Nominal → Fair → Serious → Critical.", cat:"Power" },
+    ];
+    const CATS = ["Compute", "Memory", "I/O", "Power"];
+
+    function WhatItShows({ tweaks, cpuHist }) {
+      const [tab, setTab] = useState("Compute");
+      const Reading = ({ m }) => {
+        if (m.n === "CPU") return <SvgSpark vals={cpuHist} />;
+        const map = { GPU:"12% · 1.2 GB", "Top processes":"Safari · Xcode", RAM:"61% · 9.8/16 GB",
+          "Memory pressure":"🟢 Normal", Swap:"0.0 / 2.0 GB", "Disk I/O":"↓ 2.1 MB/s", Network:"↓ 120 KB/s",
+          Battery:"84% · 2:14", Thermal:"🟢 Nominal" };
+        return <div className="reading">{map[m.n]}</div>;
+      };
+      return (
+        <section id="features" className="wrap">
+          <div className="sec-head">
+            <span className="eyebrow">What it shows</span>
+            <h2 className="sec-title">Ten readings, one glance.</h2>
+            <p className="sec-sub">Everything Activity Monitor makes you dig for, sitting one click below the menu bar.</p>
+          </div>
+
+          {tweaks.metrics === "bento" && (
+            <div className="metrics-bento">
+              {METRICS.map((m, i) => (
+                <div className={"mcard" + (m.big ? " span2" : "")} key={i}>
+                  <span className="gi" style={m.big ? { color: "var(--accent)" } : null}><Glyph name={m.g} size={22} /></span>
+                  <h4>{m.n}</h4><p>{m.d}</p>
+                  {m.big && <Reading m={m} />}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tweaks.metrics === "list" && (
+            <div className="metrics-list">
+              {METRICS.map((m, i) => (
+                <div className="mrow" key={i}>
+                  <span className="gi"><Glyph name={m.g} size={22} /></span>
+                  <span className="mname">{m.n}</span>
+                  <span className="mdesc">{m.d}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tweaks.metrics === "tabbed" && (
+            <div>
+              <div className="tabs">
+                {CATS.map(c => (
+                  <button key={c} className="tab" data-active={tab === c} onClick={() => setTab(c)}>
+                    {c}<span className="cnt">{METRICS.filter(m => m.cat === c).length}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="metrics-bento">
+                {METRICS.filter(m => m.cat === tab).map((m, i) => (
+                  <div className={"mcard" + (m.big ? " span2" : "")} key={i}>
+                    <span className="gi" style={m.big ? { color: "var(--accent)" } : null}><Glyph name={m.g} size={22} /></span>
+                    <h4>{m.n}</h4><p>{m.d}</p>
+                    {m.big && <Reading m={m} />}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      );
+    }
+
+    function PopupShowcase({ tweaks, cpuHist }) {
+      return (
+        <section className="wrap">
+          <div className="sec-head" style={{ maxWidth: 620 }}>
+            <span className="eyebrow">The popup</span>
+            <h2 className="sec-title">A whole readout, one click deep.</h2>
+            <p className="sec-sub">Click the menu-bar pill and the full picture drops down — monospaced, tabular, color-coded the second something runs hot.</p>
+          </div>
+          <div style={{ display: "flex", justifyContent: "center", padding: "12px 0 8px" }}>
+            <div style={{ width: 420, maxWidth: "100%" }}>
+              <PopupReadout cpuHist={cpuHist} callouts={tweaks.callouts} />
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    const APIS = [
+      { c: "host_statistics(HOST_CPU_LOAD_INFO)", w: "CPU · tick deltas" },
+      { c: "host_statistics64(HOST_VM_INFO64)", w: "RAM & compression" },
+      { c: "sysctl kern.memorystatus_vm_pressure_level", w: "memory pressure" },
+      { c: "sysctl vm.swapusage", w: "swap" },
+      { c: "getifaddrs", w: "network counters" },
+      { c: "IORegistry", w: "GPU · battery" },
+      { c: "/bin/ps", w: "top processes (on open)" },
+    ];
+    function UnderTheHood() {
+      return (
+        <section id="hood" className="wrap">
+          <div className="sec-head">
+            <span className="eyebrow">Under the hood</span>
+            <h2 className="sec-title">Read straight from the kernel.</h2>
+            <p className="sec-sub">No daemons, no helpers, no third-party metrics libraries. Just the system calls macOS already exposes.</p>
+          </div>
+          <div className="hood-grid">
+            <div className="api-list">
+              {APIS.map((a, i) => (
+                <div className="api" key={i}><code>{a.c}</code><span className="what">{a.w}</span></div>
+              ))}
+            </div>
+            <div className="trust">
+              <div>
+                <div className="claim"><span className="chk"><Glyph name="check" size={20} /></span> No daemons. No privileges.</div>
+                <p className="note">It runs as a plain menu-bar agent (LSUIElement) — nothing installed system-wide, nothing asking for your password.</p>
+              </div>
+              <div>
+                <div className="claim"><span className="chk"><Glyph name="check" size={20} /></span> No third-party dependencies.</div>
+                <p className="note">Metrics use only Darwin system APIs. The one package in the project is Sparkle, for updates — and nothing else touches the network.</p>
+              </div>
+              <div>
+                <div className="claim"><span className="chk"><Glyph name="check" size={20} /></span> Auto-updates via Sparkle.</div>
+                <p className="note">Updates ship through an EdDSA-signed appcast. Toggle automatic checks, or run “Check for Updates…” yourself.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    function DownloadFooter({ tweaks, onDownload, showHint }) {
+      const canDl = tweaks.platform === "mac";
+      return (
+        <>
+          <section id="download" className="wrap download">
+            <div className="dl-card">
+              <h2>{canDl ? "Put it in your menu bar." : "Grab it on your Mac."}</h2>
+              <p className="sub">Free, open source, ~40&nbsp;MB. It'll be running in about ten seconds.</p>
+              <div className="dl-actions">
+                <button className="btn btn-primary" onClick={onDownload} style={{ padding: "15px 26px", fontSize: 16 }}>
+                  {canDl ? <><Glyph name="feather" size={18} /> Download for macOS</> : <><Glyph name="feather" size={18} /> Copy link / Email it to myself</>}
+                </button>
+                <a className="btn btn-ghost" href={REPO + "/releases/latest"} target="_blank" rel="noopener" style={{ padding: "15px 26px", fontSize: 16 }}>
+                  Get it on GitHub Releases
+                </a>
+              </div>
+              <div className="reassure"><span className="chk"><Glyph name="check" size={15} /></span> Signed &amp; notarized — opens normally. &nbsp;·&nbsp; macOS&nbsp;13+ &nbsp;·&nbsp; v{VERSION}</div>
+              {showHint && canDl && (
+                <div style={{ marginTop: 16, display: "inline-flex" }}>
+                  <span className="install-hint"><Glyph name="check" size={16} /> Open the DMG → drag <b style={{color:"var(--ink)"}}>System&nbsp;Load</b> to Applications.</span>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <footer>
+            <div className="wrap foot">
+              <div>
+                <a href="#top" className="wordmark" style={{ marginBottom: 12 }}><img src="assets/icon-256.png" alt="" style={{ width: 22, height: 22, borderRadius: 6 }} /> System&nbsp;Load</a>
+                <div className="meta">
+                  macOS 13+ · Universal (Apple Silicon + Intel) · v{VERSION}<br />
+                  Auto-updates via Sparkle · © 2026 System Load
+                </div>
+              </div>
+              <div className="links">
+                <a href={REPO} target="_blank" rel="noopener">GitHub</a>
+                <a href="license.html">License</a>
+                <a href="privacy.html">Privacy</a>
+                <a href={REPO + "/releases"} target="_blank" rel="noopener">Releases</a>
+              </div>
+            </div>
+          </footer>
+        </>
+      );
+    }
+
+    /* ---------------- tweak panel (floating, explores §8.4 + §8.5) ---------------- */
+    function Seg({ value, options, onChange, accent }) {
+      return (
+        <div className={"seg" + (accent ? " accent" : "")}>
+          {options.map(o => (
+            <button key={o.v} data-on={value === o.v} onClick={() => onChange(o.v)}>{o.l}</button>
+          ))}
+        </div>
+      );
+    }
+    function Switch({ on, onChange }) {
+      return <div className="track" data-on={on} onClick={() => onChange(!on)} role="switch" aria-checked={on}><span className="knob" /></div>;
+    }
+    function Field({ label, ref_, children }) {
+      return (
+        <div className="tw-field">
+          <div className="fl"><span>{label}</span>{ref_ && <span className="ref">{ref_}</span>}</div>
+          {children}
+        </div>
+      );
+    }
+    function TweakPanel({ tweaks, update, reset }) {
+      const [open, setOpen] = useState(false);
+      if (!open) return (
+        <button className="tw-toggle" onClick={() => setOpen(true)}><span className="led" /> Explore variants</button>
+      );
+      return (
+        <div className="tw-panel">
+          <div className="tw-head"><strong>Design variants</strong><button className="x" onClick={() => setOpen(false)}>×</button></div>
+          <div className="tw-note">Live exploration of the §8.4 dimensions &amp; §8.5 tweaks. Saved to this browser.</div>
+
+          <div className="tw-group">
+            <div className="gh">§8.4 · Dimensions</div>
+            <Field label="Accent" ref_="DIM 3">
+              <div className="swatches">
+                {Object.entries(ACCENTS).map(([k, a]) => (
+                  <div key={k} className="swatch" data-on={tweaks.accent === k}
+                       style={{ background: a.accent }} onClick={() => update({ accent: k })} title={a.label}>
+                    <span className="cap">{a.label}</span>
+                  </div>
+                ))}
+              </div>
+            </Field>
+            <Field label="Hero composition" ref_="DIM 1">
+              <Seg value={tweaks.heroComp} onChange={v => update({ heroComp: v })}
+                   options={[{v:"twoup",l:"2-up"},{v:"centered",l:"Centered"},{v:"fullbleed",l:"Full-bleed"}]} />
+            </Field>
+            <Field label="Metrics layout" ref_="DIM 2">
+              <Seg value={tweaks.metrics} onChange={v => update({ metrics: v })}
+                   options={[{v:"bento",l:"Bento"},{v:"list",l:"List"},{v:"tabbed",l:"Tabbed"}]} />
+            </Field>
+          </div>
+
+          <div className="tw-group">
+            <div className="gh">§8.5 · Details</div>
+            <Field label="Numerics">
+              <Seg value={tweaks.numFont} onChange={v => update({ numFont: v })}
+                   options={[{v:"mono",l:"Mono / tabular"},{v:"sans",l:"Proportional"}]} />
+            </Field>
+            <Field label="Menu-bar mock">
+              <Seg value={tweaks.pillStyle} onChange={v => update({ pillStyle: v })}
+                   options={[{v:"glyph",l:"SF glyphs"},{v:"text",l:"CPU / RAM"}]} />
+            </Field>
+            <div className="tw-switch"><span style={{ color: "var(--ink-dim)" }}>Live sparkline</span><Switch on={tweaks.sparkAnim} onChange={v => update({ sparkAnim: v })} /></div>
+            <div className="tw-switch"><span style={{ color: "var(--ink-dim)" }}>Popup callouts</span><Switch on={tweaks.callouts} onChange={v => update({ callouts: v })} /></div>
+          </div>
+
+          <div className="tw-group">
+            <div className="gh">Preview</div>
+            <Field label="Visitor platform">
+              <Seg value={tweaks.platform} onChange={v => update({ platform: v })}
+                   options={[{v:"mac",l:"On a Mac"},{v:"other",l:"Phone / non-Mac"}]} />
+            </Field>
+          </div>
+
+          <button className="tw-reset" onClick={reset}>Reset to defaults</button>
+        </div>
+      );
+    }
+
+    /* ==================================================================== */
+    function App() {
+      const { tweaks, update, reset } = useTweaks();
+      const { isMobile } = useViewport();
+      const [toast, setToast] = useState(null);
+      const [showHint, setShowHint] = useState(false);
+
+      // accent + numeric font → CSS variables on a root wrapper
+      const a = ACCENTS[tweaks.accent] || ACCENTS.cyan;
+      const rootStyle = {
+        "--accent": a.accent, "--accent-ink": a.ink, "--accent-glow": a.glow, "--accent-dim": a.dim,
+        "--num": tweaks.numFont === "mono" ? "'JetBrains Mono', ui-monospace, monospace" : "'Space Grotesk', sans-serif",
+      };
+
+      const liveSpark = tweaks.sparkAnim && !prefersReducedMotion() && !isMobile;
+      const cpuHist = useLiveMetrics(liveSpark);
+
+      const toastTimer = useRef(null);
+      const fire = (msg) => {
+        setToast(msg);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 2600);
+      };
+
+      const onDownload = () => {
+        if (tweaks.platform === "mac") {
+          setShowHint(true);
+          try { window.location.href = DMG; } catch (e) {}
+        } else {
+          try {
+            navigator.clipboard.writeText(window.location.href);
+            fire("Link copied — open it on your Mac");
+          } catch (e) {
+            window.location.href = "mailto:?subject=System%20Load%20for%20macOS&body=" + encodeURIComponent(window.location.href);
+          }
+        }
+      };
+
+      return (
+        <div style={rootStyle}>
+          <Nav tweaks={tweaks} onDownload={onDownload} />
+          <Hero tweaks={tweaks} cpuHist={cpuHist} onDownload={onDownload} showHint={showHint} />
+          <div className="spacer-lg" />
+          <WhyDifferent />
+          <div className="spacer-lg" />
+          <WhatItShows tweaks={tweaks} cpuHist={cpuHist} />
+          <div className="spacer-lg" />
+          <PopupShowcase tweaks={tweaks} cpuHist={cpuHist} />
+          <div className="spacer-md" />
+          <UnderTheHood />
+          <div className="spacer-md" />
+          <DownloadFooter tweaks={tweaks} onDownload={onDownload} showHint={showHint} />
+          <TweakPanel tweaks={tweaks} update={update} reset={reset} />
+          {toast && <div className="toast"><Glyph name="check" size={16} /> {toast}</div>}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

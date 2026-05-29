@@ -52,3 +52,9 @@ Straight from the kernel, no third-party dependencies:
 - top processes — `/bin/ps` (only when the menu opens)
 
 Refreshes every 2 s by default (configurable in Settings). SF Symbol icons are cached.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). Free to use, modify, and distribute (including commercially); just keep the copyright notice. No warranty.
+
+The metrics engine has no third-party dependencies; the only bundled framework is [Sparkle](https://github.com/sparkle-project/Sparkle) (MIT) for updates. The project [privacy policy](landing/privacy.html) — no analytics, no telemetry, the only network request is the optional daily update check — is published with the landing site.
