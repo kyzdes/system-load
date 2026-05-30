@@ -1023,6 +1023,15 @@
       const liveSpark = tweaks.sparkAnim && !prefersReducedMotion() && !isMobile;
       const cpuHist = useLiveMetrics(liveSpark);
 
+      // The §8.4/§8.5 variant explorer is a design tool — show it only when previewing
+      // locally (file:// or localhost), never on the deployed/public site.
+      const showTweaks = (() => {
+        try {
+          if (location.protocol === "file:") return true;
+          return /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/.test(location.hostname);
+        } catch (e) { return false; }
+      })();
+
       const toastTimer = useRef(null);
       const fire = (msg) => {
         setToast(msg);
@@ -1058,7 +1067,7 @@
           <UnderTheHood />
           <div className="spacer-md" />
           <DownloadFooter tweaks={tweaks} onDownload={onDownload} showHint={showHint} />
-          <TweakPanel tweaks={tweaks} update={update} reset={reset} />
+          {showTweaks && <TweakPanel tweaks={tweaks} update={update} reset={reset} />}
           {toast && <div className="toast"><Glyph name="check" size={16} /> {toast}</div>}
         </div>
       );
